@@ -9,3 +9,11 @@ The notebooks which allow you to visulize the results are:
 Light curves: [visualize_light_curve.ipynb](https://github.com/emilleishida/fink-sn-al-randomforest/blob/main/visualize_light_curves.ipynb)
 
 Metrics results: [explore_results.ipynb](https://github.com/emilleishida/fink-sn-al-randomforest/blob/main/explore_results.ipynb)
+
+
+## Dependencies
+
+- pandas
+- numpy
+- matplotlib
+- [actsnclass](https://github.com/COINtoolbox/ActSNClass)
