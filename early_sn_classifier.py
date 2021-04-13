@@ -303,23 +303,21 @@ def main():
             # read data
             pdf1 = pd.read_parquet('data/fink_cross_tns_nov2019.parquet')
             pdf2 = pd.read_parquet('data/fink_cross_tns_sept2020.parquet')
-            pdf = pd.concat([pdf1, pdf2], ignore_index=True)
+            pdf3 = pd.read_parquet('data/fink_cross_tns_202001.parquet')
+            pdf4 = pd.read_parquet('data/fink_cross_tns_202002.parquet')
+            pdf5 = pd.read_parquet('data/fink_cross_tns_202003.parquet')
+            pdf6 = pd.read_parquet('data/fink_cross_tns_202004.parquet')
+
+            pdf = pd.concat([pdf1, pdf2, pdf3, pdf4, pdf5, pdf6], ignore_index=True)
     
             # convert data to appropriate format
             lc_flux = convert_full_dataset(pdf)
     
             # build feature matrix
             matrix = featurize_full_dataset(lc_flux)
-      
-            # clean matrix
-            if clean:
-                flag1 = np.logical_and(matrix['a_g'].values == 0, matrix['b_g'].values == 0)
-                flag2 = np.logical_and(matrix['a_r'].values == 0, matrix['b_r'].values == 0)
-                pop = np.logical_and(~flag1, ~flag2)
-    
-                matrix_clean = matrix[pop]
-            else:
-                matrix_clean = matrix
+       
+            # drop zeros
+            matrix_clean = matrix.replace(0, np.nan).dropna()
         
             matrix_clean.to_csv('data/features_matrix.csv', index=False)
         
