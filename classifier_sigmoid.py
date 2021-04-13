@@ -72,7 +72,7 @@ def mask_negative_data(data, low_bound):
 
 
 def get_fake_df(filt):
-    """Get fake data frame
+    """Get fake data frame.
 
     Parameters
     ----------
