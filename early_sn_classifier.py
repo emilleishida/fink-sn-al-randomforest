@@ -167,15 +167,19 @@ def build_samples(features: pd.DataFrame, initial_training: int,
     # initialize the temporary label holder
     train_indexes = np.random.choice(np.arange(0, features.shape[0]),
                                      size=initial_training, replace=False)
-    temp_labels = features['type'].values[train_indexes]
-
-    # make sure there are the correct ratio of Ias and non-Ias
-    while sum(temp_labels == 'SN Ia') != max(1, initial_training // 2):
-        # this is an array of 5 indexes
-        train_indexes = np.random.choice(np.arange(0, features.shape[0]),
-                                                  size=initial_training,
-                                                  replace=False)
-        temp_labels = features['type'].values[train_indexes]
+    
+    Ia_flag = features['type'].values == 'Ia'
+    Ia_indx = np.arange(0, features.shape[0])[Ia_flag]
+    nonIa_indx =  np.arange(0, features.shape[0])[~Ia_flag]
+    
+    indx_Ia_choice = np.random.choice(Ia_indx, size=max(1, initial_training // 2),
+                                      replace=False)
+    indx_nonIa_choice = np.random.choice(nonIa_indx, 
+                        size=initial_training - max(1, initial_training // 2),
+                        replace=False)
+    train_indexes = list(indx_Ia_choice) + list(indx_nonIa_choice)
+    
+    temp_labels = features['type'].values[np.array(train_indexes)]
 
     if screen:
         print('\n temp_labels = ', temp_labels, '\n')
@@ -183,7 +187,7 @@ def build_samples(features: pd.DataFrame, initial_training: int,
     # set training
     train_flag = np.array([item in train_indexes for item in range(features.shape[0])])
     
-    train_Ia_flag = features['type'].values[train_flag] == 'SN Ia'
+    train_Ia_flag = features['type'].values[train_flag] == 'Ia'
     data.train_labels = train_Ia_flag.astype(int)
     data.train_features = features[train_flag].values[:,2:]
     data.train_metadata = features[['id', 'type']][train_flag]
@@ -191,7 +195,7 @@ def build_samples(features: pd.DataFrame, initial_training: int,
     # set test set as all objs apart from those in training
     test_indexes = np.array([i for i in range(features.shape[0])
                              if i not in train_indexes])
-    test_ia_flag = features['type'].values[test_indexes] == 'SN Ia'
+    test_ia_flag = features['type'].values[test_indexes] == 'Ia'
     data.test_labels = test_ia_flag.astype(int)
     data.test_features = features[~train_flag].values[:, 2:]
     data.test_metadata = features[['id', 'type']][~train_flag]
@@ -205,6 +209,7 @@ def build_samples(features: pd.DataFrame, initial_training: int,
     if screen:
         print('Training set size: ', data.train_metadata.shape[0])
         print('Test set size: ', data.test_metadata.shape[0])
+        print('  from which queryable: ', len(data.queryable_ids))
         
     return data
 
@@ -258,11 +263,12 @@ def learn_loop(data: actsnclass.DataBase, nloops: int, strategy: str,
             data_temp.to_csv(output_prob_root + '_loop_' + str(loop) + '.csv', index=False)
             
         # calculate metrics
-        data.evaluate_classification()
+        data.evaluate_classification(screen=screen)
 
         # choose object to query
-        indx = data.make_query(strategy=strategy, batch=batch)
-
+        indx = data.make_query(strategy=strategy, batch=batch, seed=seed, screen=screen)
+        print('indx: ', indx)
+        
         # update training and test samples
         data.update_samples(indx, loop=loop)
 
@@ -273,66 +279,144 @@ def learn_loop(data: actsnclass.DataBase, nloops: int, strategy: str,
         # save query sample to file
         data.save_queried_sample(output_queried_file, loop=loop,
                                  full_sample=False)
-
+        
+        
+        
+def build_matrix(fname_output: str):
+    """Build full feature matrix to file.
     
+    Parameters
+    ----------
+    fname_output: str
+        Full path to output file.  
+        
+    Returns
+    -------
+    pd.DataFrame
+        Features matrix including all non-Ias in TNS until Mar/2021
+        and Ias in Jan-April/2020 + Sep and Nov/2019.
+    """
+    
+    # PS: I know this is not how one should write a proper function!
+    
+    # build Ia matrix
+    pdf1 = pd.read_parquet('data/fink_cross_tns_nov2019.parquet')
+    pdf2 = pd.read_parquet('data/fink_cross_tns_sept2020.parquet')
+    pdf3 = pd.read_parquet('data/fink_cross_tns_202001.parquet')
+    pdf4 = pd.read_parquet('data/fink_cross_tns_202002.parquet')
+    pdf5 = pd.read_parquet('data/fink_cross_tns_202003.parquet')
+    pdf6 = pd.read_parquet('data/fink_cross_tns_202004.parquet')
+
+    pdf7 = pd.concat([pdf1, pdf2, pdf3, pdf4, pdf5, pdf6], ignore_index=True)
+
+    # convert data to appropriate format
+    lcs2 = convert_full_dataset(pdf7)
+
+    # build feature matrix
+    mIa = featurize_full_dataset(lcs2)
+
+    # drop zeros
+    mIa_final2 = mIa.replace(0, np.nan).dropna()
+    mIa_final3 = mIa_final2.sample(frac=1).reset_index(drop=True)
+    
+    matrix_Ia = mIa_final3[mIa_final3['type'].values == 'SN Ia']
+    
+    # change Ia flag
+    matrix_Ia['type'] = ['Ia' for i in range(matrix_Ia.shape[0])]
+    
+    # build nonIa matrix
+    pdf = pd.read_csv('data/all_nonIa.csv.gz', index_col=False)
+    
+    all_data = []
+
+    for name in np.unique(pdf['objectId'].values):
+
+        flag_name = pdf['objectId'].values == name
+
+        lc = pdf[flag_name]
+
+        obj = {}
+        obj['objectId'] = name
+        obj['TNS'] = lc['TNS'].values[0] 
+        obj['cjd'] = lc['cjd'].values
+        obj["cfid"] = lc["cfid"].values
+        obj['cmagpsf'] = lc['cmagpsf'].values
+        obj['csigmapsf'] = lc['csigmapsf'].values
+    
+        all_data.append(obj)
+        
+    all_data2 = pd.DataFrame(all_data)
+    
+    # convert data to appropriate format
+    lcs_nonIa = convert_full_dataset(all_data2)
+    
+    # build feature matrix
+    m_nonIa = featurize_full_dataset(lcs_nonIa)
+   
+    # drop zeros
+    m_nonIa2 = m_nonIa.replace(0, np.nan).dropna()
+    m_nonIa3 = m_nonIa2.sample(frac=1).reset_index(drop=True)
+
+    matrix_final = pd.concat([matrix_Ia, m_nonIa3], ignore_index=True)
+    
+    matrix_final.to_csv(fname_output, index=False)
+    
+    return matrix_final
+
+
 def main():
 
     
     create_matrix = False
-    clean = False
+    fname_features_matrix = 'data/features_matrix.csv'
     
     nloops = 40
-    strategy = 'RandomSampling'
-    initial_training = 6
+    strategy = 'UncSampling'
+    initial_training = 4
+    frac_Ia_tot = 0.5
     
-    seed = np.random.seed()
+    features_names = ['a_g', 'b_g', 'c_g', 'snratio_g', 'chisq_g', 'nrise_g', 
+                          'a_r', 'b_r', 'c_r', 'snratio_r', 'chisq_r', 'nrise_r']
     
-    for v in range(50):
+    if create_matrix:
+        matrix_clean = build_matrix(fname_output=fname_features_matrix)
+        
+    else:
+        matrix_clean = pd.read_csv(fname_features_matrix, index_col=False)
+    
+    for v in range(100):
         
     
-        output_metrics_file = 'results/metrics/' + strategy + '/metrics_' + strategy + '_' + str(v) + '.dat'
-        output_queried_file = 'results/metrics/' + strategy + '/queried_' + strategy + '_'+ str(v) + '.dat'
-        output_prob_root = 'results/class_prob/' + strategy + '/v' + str(0) + '/class_prob_' + strategy + 'v' + str(v)
+        output_metrics_file = 'results/' + strategy + '/metrics/metrics_' + strategy + '_v' + str(v) + '.dat'
+        output_queried_file = 'results/' + strategy + '/queries/queried_' + strategy + '_v'+ str(v) + '.dat'
+        output_prob_root = 'results/' + strategy + '/class_prob/v' + str(v) + '/class_prob_' + strategy + '_'
     
-        for name in ['results/', 'results/' + strategy + '/', 'results/class_prob/', 'results/class_prob/' + strategy,
-                     'results/class_prob/' + strategy + '/v' + str(0), 'results/metrics/', 'results/metrics/' + strategy]:
+        for name in ['results/', 'results/' + strategy + '/', 'results/' + strategy + '/class_prob/',
+                     'results/' + strategy + '/class_prob/v' + str(v) + '/',
+                     'results/' + strategy + '/metrics/', 'results/' + strategy + '/queries/',
+                     'results/' + strategy + '/training_samples/', 'results/' + strategy + '/test_samples/']:
             if not os.path.isdir(name):
-                os.makedirs(name)
+                os.makedirs(name)    
     
-        if create_matrix:
-            # read data
-            pdf1 = pd.read_parquet('data/fink_cross_tns_nov2019.parquet')
-            pdf2 = pd.read_parquet('data/fink_cross_tns_sept2020.parquet')
-            pdf3 = pd.read_parquet('data/fink_cross_tns_202001.parquet')
-            pdf4 = pd.read_parquet('data/fink_cross_tns_202002.parquet')
-            pdf5 = pd.read_parquet('data/fink_cross_tns_202003.parquet')
-            pdf6 = pd.read_parquet('data/fink_cross_tns_202004.parquet')
-
-            pdf = pd.concat([pdf1, pdf2, pdf3, pdf4, pdf5, pdf6], ignore_index=True)
-    
-            # convert data to appropriate format
-            lc_flux = convert_full_dataset(pdf)
-    
-            # build feature matrix
-            matrix = featurize_full_dataset(lc_flux)
-       
-            # drop zeros
-            matrix_clean = matrix.replace(0, np.nan).dropna()
-        
-            matrix_clean.to_csv('data/features_matrix.csv', index=False)
-        
-        else:
-            matrix_clean = pd.read_csv('data/features_matrix.csv', index_col=False)
-    
-    
-        # build samples
+        # build samples        
         data = build_samples(matrix_clean, initial_training=initial_training, screen=True)
+        
+        # save initial data        
+        train = pd.DataFrame(data.train_features, columns=features_names)
+        train['objectId'] = data.train_metadata['id'].values
+        train['type'] = data.train_metadata['type'].values
+        train.to_csv('results/' + strategy + '/training_samples/initialtrain_v' + str(v) + '.csv', index=False)
+        
+        test = pd.DataFrame(data.test_features, columns=features_names)
+        test['objectId'] = data.test_metadata['id'].values
+        test['type'] = data.test_metadata['type'].values
+        test.to_csv('results/' + strategy + '/test_samples/initial_test_v' + str(v) + '.csv', index=False)        
     
         # perform learnin loop
         learn_loop(data, nloops=nloops, strategy=strategy, 
                    output_metrics_file=output_metrics_file, 
                    output_queried_file=output_queried_file,
-                   classifier='RandomForest', seed=seed,
+                   classifier='RandomForest', seed=None,
                    batch=1, screen=True, output_prob_root=output_prob_root)
     
 if __name__ == '__main__':
