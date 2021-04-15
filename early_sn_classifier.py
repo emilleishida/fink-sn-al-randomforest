@@ -370,9 +370,9 @@ def main():
     create_matrix = False
     fname_features_matrix = 'data/features_matrix.csv'
     
-    nloops = 40
+    nloops = 60
     strategy = 'UncSampling'
-    initial_training = 4
+    initial_training = 10
     frac_Ia_tot = 0.5
     
     features_names = ['a_g', 'b_g', 'c_g', 'snratio_g', 'chisq_g', 'nrise_g', 
