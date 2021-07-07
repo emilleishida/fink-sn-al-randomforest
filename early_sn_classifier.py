@@ -27,8 +27,10 @@ def mag2fluxcal_snana(magpsf: float, sigmapsf: float):
     Parameters
     ----------
     magpsf: float
-        PSF-fit magnitude from ZTF
+        PSF-fit magnitude from ZTF.
     sigmapsf: float
+        Error on PSF-fit magnitude from ZTF. 
+    
     Returns
     ----------
     fluxcal: float
@@ -58,7 +60,10 @@ def convert_full_dataset(pdf: pd.DataFrame):
         Columns are ['objectId', 'type', 'MJD', 'FLT', 
         'FLUXCAL', 'FLUXCALERR'].
     """
-
+    # Ia types in TNS
+    Ia_group = ['SN Ia', 'SN Ia-91T-like', 'SN Ia-91bg-like', 'SN Ia-CSM', 
+                'SN Ia-pec', 'SN Iax[02cx-like]']
+    
     # hard code ZTF filters
     filters = ['g', 'r']
     
@@ -66,17 +71,34 @@ def convert_full_dataset(pdf: pd.DataFrame):
 
     for index in range(pdf.shape[0]):
 
-        name = pdf['objectId'].values[index]
-        sntype = pdf['TNS'].values[index]
+        name = pdf['candid'].values[index]
+        sntype_orig = pdf['TNS'].values[index]
+        
+        if sntype_orig in Ia_group:
+            sntype = 'Ia'
+        else:
+            sntype = sntype_orig
     
         for f in range(1,3):
-            filter_flag = pdf['cfid'].values[index] == f
-    
-            mjd = pdf['cjd'].values[index][filter_flag]
-            mag = pdf['cmagpsf'].values[index][filter_flag]
-            magerr = pdf['csigmapsf'].values[index][filter_flag] 
+            
+            if isinstance(pdf.iloc[index]['cfid'], str):
+                ffs = np.array([int(item) for item in pdf.iloc[index]['cfid'][1:-1].split()])
+                filter_flag = ffs == f
+                mjd = np.array([float(item) for item in pdf.iloc[index]['cjd'][1:-1].split()])[filter_flag]
+                mag = np.array([float(item) for item in pdf.iloc[index]['cmagpsf'][1:-1].split()])[filter_flag]
+                magerr = np.array([float(item) for item in pdf.iloc[index]['csigmapsf'][1:-1].split()])[filter_flag]
+            else:
+                filter_flag = pdf['cfid'].values[index] == f
+                mjd = pdf['cjd'].values[index][filter_flag]
+                mag = pdf['cmagpsf'].values[index][filter_flag]
+                magerr = pdf['csigmapsf'].values[index][filter_flag] 
 
-            fluxcal, fluxcal_err = mag2fluxcal_snana(mag, magerr)
+            fluxcal = []
+            fluxcal_err = []
+            for k in range(len(mag)):
+                f1, f1err = mag2fluxcal_snana(mag[k], magerr[k])
+                fluxcal.append(f1)
+                fluxcal_err.append(f1err)
         
             for i in range(len(fluxcal)):
                 lc_flux_sig.append([name, sntype, mjd[i], filters[f - 1],
@@ -115,6 +137,9 @@ def featurize_full_dataset(lc: pd.DataFrame):
     features_all = []
 
     for indx in range(np.unique(lc['id'].values).shape[0]):
+
+        print('indx: ', indx)
+        
         name = np.unique(lc['id'].values)[indx]
 
         obj_flag = lc['id'].values == name
@@ -282,13 +307,29 @@ def learn_loop(data: actsnclass.DataBase, nloops: int, strategy: str,
         
         
         
-def build_matrix(fname_output: str):
+def build_matrix(fname_output: str, dirname_input: str, n: int,
+                fname_raw_output=None, new_raw_file=False, 
+                input_raw_file=None):
     """Build full feature matrix to file.
     
     Parameters
     ----------
     fname_output: str
         Full path to output file.  
+    dirname_input: str
+        Full path to directory including all parquet files.
+    n: int
+        Number of simbad objects to choose.
+    fname_raw_output: str (optinal)
+        Full path to filename containing raw data.
+        Only used if new_raw_file == True.
+    input_raw_file: str (optional)
+        Full path to input raw data matrix.
+        Only used if new_raw_file == False.
+    new_raw_file: bool (optional)
+        If True generate new input matrix from parquet files.
+        Default is False.
+    
         
     Returns
     -------
@@ -296,105 +337,100 @@ def build_matrix(fname_output: str):
         Features matrix including all non-Ias in TNS until Mar/2021
         and Ias in Jan-April/2020 + Sep and Nov/2019.
     """
-    
-    # PS: I know this is not how one should write a proper function!
-    
-    # build Ia matrix
-    pdf1 = pd.read_parquet('data/fink_cross_tns_nov2019.parquet')
-    pdf2 = pd.read_parquet('data/fink_cross_tns_sept2020.parquet')
-    pdf3 = pd.read_parquet('data/fink_cross_tns_202001.parquet')
-    pdf4 = pd.read_parquet('data/fink_cross_tns_202002.parquet')
-    pdf5 = pd.read_parquet('data/fink_cross_tns_202003.parquet')
-    pdf6 = pd.read_parquet('data/fink_cross_tns_202004.parquet')
+    if new_raw_file:
+        data_temp = []
+        flist = os.listdir(dirname_input)
+        simbad = False
+        tns = False
+        # read all tns file and 1 random simbad file
+        for name in flist:
+            if ('simbad' in name and not simbad):
+                d1 = pd.read_parquet(dirname_input + name)
+                data_temp.append(d1.sample(n, replace=False))
+                simbad = True
+            elif 'tns' in name and not tns:
+                d1 = pd.read_parquet(dirname_input + name)
+                data_temp.append(d1)
+                #tns = True
 
-    pdf7 = pd.concat([pdf1, pdf2, pdf3, pdf4, pdf5, pdf6], ignore_index=True)
+        pdf7 = pd.concat(data_temp, ignore_index=True)
+        pdf7.fillna(-99, inplace=True)
+        pdf7.to_csv(fname_raw_output, index=False)
+        
+    else:
+        pdf7 = pd.read_csv(input_raw_file, index_col=False)
+        if ' ' in pdf7.keys()[0]:
+            pdf7 = pd.read_csv(input_raw_file, delim_whitespace=True)
 
     # convert data to appropriate format
     lcs2 = convert_full_dataset(pdf7)
 
     # build feature matrix
-    mIa = featurize_full_dataset(lcs2)
+    m = featurize_full_dataset(lcs2)
 
     # drop zeros
-    mIa_final2 = mIa.replace(0, np.nan).dropna()
-    mIa_final3 = mIa_final2.sample(frac=1).reset_index(drop=True)
+    m_final2 = m.replace(0, np.nan).dropna()
+    m_final3 = m_final2.sample(frac=1).reset_index(drop=True)
     
-    matrix_Ia = mIa_final3[mIa_final3['type'].values == 'SN Ia']
+    matrix = m_final3
     
-    # change Ia flag
-    matrix_Ia['type'] = ['Ia' for i in range(matrix_Ia.shape[0])]
-    
-    # build nonIa matrix
-    pdf = pd.read_csv('data/all_nonIa.csv.gz', index_col=False)
-    
-    all_data = []
+    matrix.to_csv(fname_output, index=False)
 
-    for name in np.unique(pdf['objectId'].values):
-
-        flag_name = pdf['objectId'].values == name
-
-        lc = pdf[flag_name]
-
-        obj = {}
-        obj['objectId'] = name
-        obj['TNS'] = lc['TNS'].values[0] 
-        obj['cjd'] = lc['cjd'].values
-        obj["cfid"] = lc["cfid"].values
-        obj['cmagpsf'] = lc['cmagpsf'].values
-        obj['csigmapsf'] = lc['csigmapsf'].values
+    print('Extract features from  ', matrix.shape[0], 'objects.')
     
-        all_data.append(obj)
-        
-    all_data2 = pd.DataFrame(all_data)
-    
-    # convert data to appropriate format
-    lcs_nonIa = convert_full_dataset(all_data2)
-    
-    # build feature matrix
-    m_nonIa = featurize_full_dataset(lcs_nonIa)
-   
-    # drop zeros
-    m_nonIa2 = m_nonIa.replace(0, np.nan).dropna()
-    m_nonIa3 = m_nonIa2.sample(frac=1).reset_index(drop=True)
-
-    matrix_final = pd.concat([matrix_Ia, m_nonIa3], ignore_index=True)
-    
-    matrix_final.to_csv(fname_output, index=False)
-    
-    return matrix_final
+    return matrix
 
 
 def main():
 
     
-    create_matrix = False
-    fname_features_matrix = 'data/features_matrix.csv'
+    create_matrix = True
+    fname_features_matrix = 'data/features_for_emille.csv'
+    #fname_features_matrix = 'data/features_05JUL2021_15k.csv'
+    fname_raw_output = 'data/data_for_emille.dat'
+    dirname_input = '../../data/AL_data/'
+    dirname_output = 'results_for_emille/'
     
     nloops = 60
     strategy = 'UncSampling'
     initial_training = 10
     frac_Ia_tot = 0.5
+    n_realizations = 100
+    marco = False             # flag input matrix created by Marco
+    n = 15000
+    new_raw_file = False
+    input_raw_file = fname_raw_output
+    
     
     features_names = ['a_g', 'b_g', 'c_g', 'snratio_g', 'chisq_g', 'nrise_g', 
                           'a_r', 'b_r', 'c_r', 'snratio_r', 'chisq_r', 'nrise_r']
     
     if create_matrix:
-        matrix_clean = build_matrix(fname_output=fname_features_matrix)
+        matrix_clean = build_matrix(fname_output=fname_features_matrix, dirname_input=dirname_input, 
+                                    n=n, fname_raw_output=fname_raw_output, new_raw_file=new_raw_file,
+                                    input_raw_file=input_raw_file)
+        print(np.unique(matrix_clean['type'].values))
         
     else:
-        matrix_clean = pd.read_csv(fname_features_matrix, index_col=False)
+        matrix_clean = pd.read_csv(fname_features_matrix, comment='#')
+        if marco:
+            matrix_clean.drop(labels=['id', 'redshift', 'code', 'sample'], inplace=True, axis=1)
+            matrix_clean.rename(columns={'index': 'id'}, inplace=True)
     
-    for v in range(100):
+    for v in range(n_realizations):
         
     
-        output_metrics_file = 'results/' + strategy + '/metrics/metrics_' + strategy + '_v' + str(v) + '.dat'
-        output_queried_file = 'results/' + strategy + '/queries/queried_' + strategy + '_v'+ str(v) + '.dat'
-        output_prob_root = 'results/' + strategy + '/class_prob/v' + str(v) + '/class_prob_' + strategy + '_'
+        output_metrics_file = dirname_output + '/' + strategy + '/metrics/metrics_' + strategy + '_v' + str(v) + '.dat'
+        output_queried_file = dirname_output + '/' + strategy + '/queries/queried_' + strategy + '_v'+ str(v) + '.dat'
+        output_prob_root = dirname_output + '/' + strategy + '/class_prob/v' + str(v) + '/class_prob_' + strategy + '_'
     
-        for name in ['results/', 'results/' + strategy + '/', 'results/' + strategy + '/class_prob/',
-                     'results/' + strategy + '/class_prob/v' + str(v) + '/',
-                     'results/' + strategy + '/metrics/', 'results/' + strategy + '/queries/',
-                     'results/' + strategy + '/training_samples/', 'results/' + strategy + '/test_samples/']:
+        for name in [dirname_output + '/', dirname_output + '/' + strategy + '/', 
+                     dirname_output + '/' + strategy + '/class_prob/',
+                     dirname_output + '/' + strategy + '/class_prob/v' + str(v) + '/',
+                     dirname_output + '/' + strategy + '/metrics/', 
+                     dirname_output + '/' + strategy + '/queries/',
+                     dirname_output + '/' + strategy + '/training_samples/', 
+                     dirname_output + '/' + strategy + '/test_samples/']:
             if not os.path.isdir(name):
                 os.makedirs(name)    
     
@@ -405,12 +441,12 @@ def main():
         train = pd.DataFrame(data.train_features, columns=features_names)
         train['objectId'] = data.train_metadata['id'].values
         train['type'] = data.train_metadata['type'].values
-        train.to_csv('results/' + strategy + '/training_samples/initialtrain_v' + str(v) + '.csv', index=False)
+        train.to_csv(dirname_output + '/' + strategy + '/training_samples/initialtrain_v' + str(v) + '.csv', index=False)
         
         test = pd.DataFrame(data.test_features, columns=features_names)
         test['objectId'] = data.test_metadata['id'].values
         test['type'] = data.test_metadata['type'].values
-        test.to_csv('results/' + strategy + '/test_samples/initial_test_v' + str(v) + '.csv', index=False)        
+        test.to_csv(dirname_output + '/' + strategy + '/test_samples/initial_test_v' + str(v) + '.csv', index=False)        
     
         # perform learnin loop
         learn_loop(data, nloops=nloops, strategy=strategy, 
