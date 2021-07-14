@@ -77,7 +77,7 @@ def convert_full_dataset(pdf: pd.DataFrame):
         if sntype_orig in Ia_group:
             sntype = 'Ia'
         else:
-            sntype = sntype_orig
+            sntype = sntype_orig.replace(" ", "")
     
         for f in range(1,3):
             
@@ -309,7 +309,7 @@ def learn_loop(data: actsnclass.DataBase, nloops: int, strategy: str,
         
 def build_matrix(fname_output: str, dirname_input: str, n: int,
                 fname_raw_output=None, new_raw_file=False, 
-                input_raw_file=None):
+                input_raw_file=None, n_files_simbad=1):
     """Build full feature matrix to file.
     
     Parameters
@@ -329,25 +329,26 @@ def build_matrix(fname_output: str, dirname_input: str, n: int,
     new_raw_file: bool (optional)
         If True generate new input matrix from parquet files.
         Default is False.
+    n_files_simbad: int (optional)
+        Number of simbad files to use. Default is 1.
     
         
     Returns
     -------
     pd.DataFrame
-        Features matrix including all non-Ias in TNS until Mar/2021
-        and Ias in Jan-April/2020 + Sep and Nov/2019.
+        Features matrix.
     """
     if new_raw_file:
         data_temp = []
         flist = os.listdir(dirname_input)
-        simbad = False
+        simbad = 0
         tns = False
         # read all tns file and 1 random simbad file
         for name in flist:
-            if ('simbad' in name and not simbad):
+            if ('simbad' in name and simbad < n_files_simbad):
                 d1 = pd.read_parquet(dirname_input + name)
                 data_temp.append(d1.sample(n, replace=False))
-                simbad = True
+                simbad = simbad + 1
             elif 'tns' in name and not tns:
                 d1 = pd.read_parquet(dirname_input + name)
                 data_temp.append(d1)
@@ -384,15 +385,14 @@ def build_matrix(fname_output: str, dirname_input: str, n: int,
 def main():
 
     
-    create_matrix = True
-    fname_features_matrix = 'data/features_for_emille.csv'
-    #fname_features_matrix = 'data/features_05JUL2021_15k.csv'
-    fname_raw_output = 'data/data_for_emille.dat'
+    create_matrix = False
+    fname_features_matrix = 'data/features_42876.csv'
+    fname_raw_output = 'data/raw_2f_simbad.csv.gz'
     dirname_input = '../../data/AL_data/'
-    dirname_output = 'results_for_emille/'
+    dirname_output = 'results_42876/'
     
     nloops = 60
-    strategy = 'UncSampling'
+    strategy = 'RandomSampling'
     initial_training = 10
     frac_Ia_tot = 0.5
     n_realizations = 100
@@ -400,6 +400,7 @@ def main():
     n = 15000
     new_raw_file = False
     input_raw_file = fname_raw_output
+    n_files_simbad = 2
     
     
     features_names = ['a_g', 'b_g', 'c_g', 'snratio_g', 'chisq_g', 'nrise_g', 
@@ -408,7 +409,8 @@ def main():
     if create_matrix:
         matrix_clean = build_matrix(fname_output=fname_features_matrix, dirname_input=dirname_input, 
                                     n=n, fname_raw_output=fname_raw_output, new_raw_file=new_raw_file,
-                                    input_raw_file=input_raw_file)
+                                    input_raw_file=input_raw_file,
+                                   n_files_simbad=n_files_simbad)
         print(np.unique(matrix_clean['type'].values))
         
     else:
